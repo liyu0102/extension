@@ -1,0 +1,106 @@
+.cmp-settings {
+    width: 100%;
+}
+
+.cmp-settings .cmp-desc {
+    display: block;
+    margin: 6px 0 10px;
+    opacity: 0.85;
+}
+
+.cmp-settings .cmp-desc code {
+    padding: 0 4px;
+    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.cmp-status {
+    padding: 6px 8px;
+    border-radius: 6px;
+    margin: 6px 0;
+    font-size: 0.9em;
+    line-height: 1.4;
+}
+
+.cmp-status-ok { background: rgba(46, 160, 67, 0.18); }
+.cmp-status-warn { background: rgba(210, 153, 34, 0.2); }
+.cmp-status-err { background: rgba(218, 54, 51, 0.2); }
+.cmp-status-info { background: rgba(255, 255, 255, 0.08); }
+
+.cmp-globals {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 14px;
+    margin: 8px 0 12px;
+}
+
+.cmp-model-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.cmp-empty {
+    opacity: 0.7;
+    font-style: italic;
+}
+
+.cmp-model-card {
+    border: 1px solid var(--SmartThemeBorderColor, rgba(255, 255, 255, 0.15));
+    border-radius: 8px;
+    padding: 10px;
+    background: rgba(255, 255, 255, 0.03);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.cmp-model-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.cmp-label {
+    flex: 0 0 auto;
+    min-width: 64px;
+    opacity: 0.85;
+}
+
+.cmp-model-id {
+    flex: 1 1 auto;
+}
+
+.cmp-del {
+    flex: 0 0 auto;
+}
+
+.cmp-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.cmp-thinking {
+    flex: 1 1 auto;
+}
+
+.cmp-flags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px 14px;
+}
+
+.cmp-flag {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+}
+
+.cmp-buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
