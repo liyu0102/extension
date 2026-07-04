@@ -89,6 +89,7 @@ function defaultState() {
     return {
         enabled: true,
         patchFrontend: true,
+        openrouterMaxEffort: true,
         backendFile: '',
         frontendFile: '',
         models: [
@@ -168,8 +169,10 @@ function renderModels() {
 function syncGlobalControls() {
     const enabled = document.getElementById('cmp-enabled');
     const patchFe = document.getElementById('cmp-patch-frontend');
+    const orMax = document.getElementById('cmp-openrouter-max');
     if (enabled) enabled.checked = state.enabled !== false;
     if (patchFe) patchFe.checked = state.patchFrontend !== false;
+    if (orMax) orMax.checked = state.openrouterMaxEffort !== false;
 }
 
 async function loadFromServer() {
@@ -252,7 +255,12 @@ function buildPanel() {
     feCb.addEventListener('change', () => { state.patchFrontend = feCb.checked; });
     feLbl.append(feCb, el('span', { text: '补丁前端 (1M 上下文)' }));
 
-    globals.append(enabledLbl, feLbl);
+    const orLbl = el('label', { class: 'checkbox_label', title: 'OpenRouter 选“极高”时保留 max 思考（而非降级成 high），并把 verbosity 兜底设为 max' });
+    const orCb = el('input', { type: 'checkbox', id: 'cmp-openrouter-max' });
+    orCb.addEventListener('change', () => { state.openrouterMaxEffort = orCb.checked; });
+    orLbl.append(orCb, el('span', { text: 'OpenRouter 极高思考' }));
+
+    globals.append(enabledLbl, feLbl, orLbl);
     content.append(globals);
 
     // model list
