@@ -85,6 +85,15 @@ function defaultModel() {
     };
 }
 
+function defaultCaching() {
+    return {
+        manage: false,
+        enableSystemPromptCache: true,
+        cachingAtDepth: 12,
+        extendedTTL: true,
+    };
+}
+
 function defaultState() {
     return {
         enabled: true,
@@ -92,6 +101,8 @@ function defaultState() {
         openrouterMaxEffort: true,
         backendFile: '',
         frontendFile: '',
+        configYamlFile: '',
+        caching: defaultCaching(),
         models: [
             {
                 id: 'claude-opus-4-8',
@@ -173,6 +184,15 @@ function syncGlobalControls() {
     if (enabled) enabled.checked = state.enabled !== false;
     if (patchFe) patchFe.checked = state.patchFrontend !== false;
     if (orMax) orMax.checked = state.openrouterMaxEffort !== false;
+    const c = state.caching || defaultCaching();
+    const manage = document.getElementById('cmp-cache-manage');
+    const sys = document.getElementById('cmp-cache-system');
+    const depth = document.getElementById('cmp-cache-depth');
+    const ttl = document.getElementById('cmp-cache-ttl');
+    if (manage) manage.checked = Boolean(c.manage);
+    if (sys) sys.checked = c.enableSystemPromptCache !== false;
+    if (depth) depth.value = Number.isInteger(Number(c.cachingAtDepth)) ? c.cachingAtDepth : 12;
+    if (ttl) ttl.checked = c.extendedTTL !== false;
 }
 
 async function loadFromServer() {
@@ -181,6 +201,7 @@ async function loadFromServer() {
         serverAvailable = true;
         state = data.config && typeof data.config === 'object' ? data.config : defaultState();
         if (!Array.isArray(state.models)) state.models = [];
+        if (!state.caching || typeof state.caching !== 'object') state.caching = defaultCaching();
         setStatus('已连接后端插件 ✓', 'ok');
     } catch (e) {
         serverAvailable = false;
@@ -201,7 +222,7 @@ async function save() {
         state = data.config || state;
         renderModels();
         syncGlobalControls();
-        const changed = (data.result?.backend?.changed || data.result?.frontend?.changed);
+        const changed = (data.result?.backend?.changed || data.result?.frontend?.changed || data.result?.configYaml?.changed);
         if (changed) {
             toast('已保存并打补丁。请重启 SillyTavern 使其生效。', 'success');
             setStatus('已保存并打补丁 ✓ — 需重启 SillyTavern 生效', 'warn');
@@ -262,6 +283,47 @@ function buildPanel() {
 
     globals.append(enabledLbl, feLbl, orLbl);
     content.append(globals);
+
+    // prompt caching section
+    const cacheWrap = el('div', { class: 'cmp-globals' });
+    cacheWrap.append(el('b', { text: '提示词缓存 (config.yaml)' }));
+
+    const manageLbl = el('label', { class: 'checkbox_label', title: '开启后，保存时会把下面三项写进 SillyTavern 的 config.yaml → claude 段' });
+    const manageCb = el('input', { type: 'checkbox', id: 'cmp-cache-manage' });
+    manageCb.addEventListener('change', () => { state.caching.manage = manageCb.checked; });
+    manageLbl.append(manageCb, el('span', { text: '由插件接管缓存设置' }));
+
+    const sysLbl = el('label', { class: 'checkbox_label', title: '缓存系统提示词+角色卡+工具列表 (enableSystemPromptCache)' });
+    const sysCb = el('input', { type: 'checkbox', id: 'cmp-cache-system' });
+    sysCb.addEventListener('change', () => { state.caching.enableSystemPromptCache = sysCb.checked; });
+    sysLbl.append(sysCb, el('span', { text: '缓存系统提示词+角色卡' }));
+
+    const ttlLbl = el('label', { class: 'checkbox_label', title: '缓存保留 1 小时（关闭则 5 分钟）。回合间隔常超过 5 分钟就开着 (extendedTTL)' });
+    const ttlCb = el('input', { type: 'checkbox', id: 'cmp-cache-ttl' });
+    ttlCb.addEventListener('change', () => { state.caching.extendedTTL = ttlCb.checked; });
+    ttlLbl.append(ttlCb, el('span', { text: '1 小时缓存 (关=5分钟)' }));
+
+    const depthRow = el('div', { class: 'cmp-row' });
+    const depthInput = el('input', {
+        class: 'text_pole cmp-cache-depth',
+        id: 'cmp-cache-depth',
+        type: 'number',
+        min: '-1',
+        step: '1',
+        title: '打点深度 (cachingAtDepth)。填“发原文的楼层数+2”：例如正则只放行 10 层内原文就填 12；换成 20 层就填 22。-1 = 关闭深度打点',
+        oninput: (e) => {
+            const v = parseInt(e.target.value, 10);
+            state.caching.cachingAtDepth = Number.isInteger(v) && v >= -1 ? v : 12;
+        },
+    });
+    depthRow.append(el('label', { class: 'cmp-label', text: '打点深度' }), depthInput);
+
+    cacheWrap.append(manageLbl, sysLbl, ttlLbl, depthRow);
+    cacheWrap.append(el('small', {
+        class: 'cmp-desc',
+        text: '深度 = 发原文的楼层数 + 2（摘要边界外的稳定区）。修改后保存并重启 ST 生效。',
+    }));
+    content.append(cacheWrap);
 
     // model list
     content.append(el('div', { id: 'cmp-model-list', class: 'cmp-model-list' }));
