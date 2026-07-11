@@ -91,6 +91,7 @@ function defaultCaching() {
         enableSystemPromptCache: true,
         cachingAtDepth: 12,
         extendedTTL: true,
+        patchCustomSource: false,
     };
 }
 
@@ -189,10 +190,12 @@ function syncGlobalControls() {
     const sys = document.getElementById('cmp-cache-system');
     const depth = document.getElementById('cmp-cache-depth');
     const ttl = document.getElementById('cmp-cache-ttl');
+    const custom = document.getElementById('cmp-cache-custom');
     if (manage) manage.checked = Boolean(c.manage);
     if (sys) sys.checked = c.enableSystemPromptCache !== false;
     if (depth) depth.value = Number.isInteger(Number(c.cachingAtDepth)) ? c.cachingAtDepth : 12;
     if (ttl) ttl.checked = c.extendedTTL !== false;
+    if (custom) custom.checked = Boolean(c.patchCustomSource);
 }
 
 async function loadFromServer() {
@@ -303,6 +306,11 @@ function buildPanel() {
     ttlCb.addEventListener('change', () => { state.caching.extendedTTL = ttlCb.checked; });
     ttlLbl.append(ttlCb, el('span', { text: '1 小时缓存 (关=5分钟)' }));
 
+    const customLbl = el('label', { class: 'checkbox_label', title: '给 ST 的“自定义(OpenAI兼容)”源也打缓存断点（如 Vercel AI Gateway 等中转）。模型名带 claude 才生效，复用上面的开关和打点深度' });
+    const customCb = el('input', { type: 'checkbox', id: 'cmp-cache-custom' });
+    customCb.addEventListener('change', () => { state.caching.patchCustomSource = customCb.checked; });
+    customLbl.append(customCb, el('span', { text: '自定义(兼容)源也打缓存断点' }));
+
     const depthRow = el('div', { class: 'cmp-row' });
     const depthInput = el('input', {
         class: 'text_pole cmp-cache-depth',
@@ -318,7 +326,7 @@ function buildPanel() {
     });
     depthRow.append(el('label', { class: 'cmp-label', text: '打点深度' }), depthInput);
 
-    cacheWrap.append(manageLbl, sysLbl, ttlLbl, depthRow);
+    cacheWrap.append(manageLbl, sysLbl, ttlLbl, customLbl, depthRow);
     cacheWrap.append(el('small', {
         class: 'cmp-desc',
         text: '深度 = 发原文的楼层数 + 2（摘要边界外的稳定区）。修改后保存并重启 ST 生效。',
