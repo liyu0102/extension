@@ -12,9 +12,13 @@ import { getRequestHeaders } from '../../../../script.js';
  * The server plugin is what actually patches ST's source so new Claude models
  * (e.g. claude-opus-4-8) use the correct thinking mode. This panel just edits
  * the plugin's config.json without touching files by hand.
+ *
+ * Collapsing is handled by ST's native .inline-drawer-toggle handler in
+ * script.js — do NOT add our own click handler, the two would cancel out.
  */
 
 const API_BASE = '/api/plugins/claude-model-patcher';
+const LAST_DEPTH_KEY = 'cmpLastCacheDepth';
 const THINKING_OPTIONS = [
     { value: 'adaptive', label: 'Adaptive (自适应思考, 4.7/4.8)' },
     { value: 'extended', label: 'Extended (扩展/预算思考)' },
@@ -119,6 +123,26 @@ function defaultState() {
     };
 }
 
+function isCacheMasterOn() {
+    const c = state?.caching || {};
+    return c.enableSystemPromptCache !== false || Number(c.cachingAtDepth) !== -1;
+}
+
+function rememberDepth() {
+    const d = Number(state?.caching?.cachingAtDepth);
+    if (Number.isInteger(d) && d >= 0) {
+        try { localStorage.setItem(LAST_DEPTH_KEY, String(d)); } catch { /* ignore */ }
+    }
+}
+
+function recallDepth() {
+    try {
+        const d = parseInt(localStorage.getItem(LAST_DEPTH_KEY), 10);
+        if (Number.isInteger(d) && d >= 0) return d;
+    } catch { /* ignore */ }
+    return 12;
+}
+
 function renderModelCard(model, index) {
     const card = el('div', { class: 'cmp-model-card' });
 
@@ -178,6 +202,17 @@ function renderModels() {
     state.models.forEach((m, i) => list.append(renderModelCard(m, i)));
 }
 
+/** 根据 manage / 缓存总开关 的状态给缓存区块的子项加/去灰色禁用样式 */
+function updateCacheUIState() {
+    const c = state.caching || defaultCaching();
+    const manageOn = Boolean(c.manage);
+    const masterOn = isCacheMasterOn();
+    const masterRow = document.getElementById('cmp-cache-master-row');
+    const subWrap = document.getElementById('cmp-cache-sub');
+    if (masterRow) masterRow.classList.toggle('cmp-disabled', !manageOn);
+    if (subWrap) subWrap.classList.toggle('cmp-disabled', !manageOn || !masterOn);
+}
+
 function syncGlobalControls() {
     const enabled = document.getElementById('cmp-enabled');
     const patchFe = document.getElementById('cmp-patch-frontend');
@@ -187,15 +222,18 @@ function syncGlobalControls() {
     if (orMax) orMax.checked = state.openrouterMaxEffort !== false;
     const c = state.caching || defaultCaching();
     const manage = document.getElementById('cmp-cache-manage');
+    const master = document.getElementById('cmp-cache-master');
     const sys = document.getElementById('cmp-cache-system');
     const depth = document.getElementById('cmp-cache-depth');
     const ttl = document.getElementById('cmp-cache-ttl');
     const custom = document.getElementById('cmp-cache-custom');
     if (manage) manage.checked = Boolean(c.manage);
+    if (master) master.checked = isCacheMasterOn();
     if (sys) sys.checked = c.enableSystemPromptCache !== false;
     if (depth) depth.value = Number.isInteger(Number(c.cachingAtDepth)) ? c.cachingAtDepth : 12;
     if (ttl) ttl.checked = c.extendedTTL !== false;
     if (custom) custom.checked = Boolean(c.patchCustomSource);
+    updateCacheUIState();
 }
 
 async function loadFromServer() {
@@ -246,10 +284,26 @@ function setStatus(msg, kind) {
     s.className = `cmp-status cmp-status-${kind || 'info'}`;
 }
 
+/** 带标题和说明的分区容器 */
+function section(title, desc) {
+    const wrap = el('div', { class: 'cmp-section' });
+    wrap.append(el('div', { class: 'cmp-section-title', text: title }));
+    if (desc) wrap.append(el('small', { class: 'cmp-section-desc', text: desc }));
+    return wrap;
+}
+
+function checkbox(id, label, title, onChange) {
+    const lbl = el('label', { class: 'checkbox_label', title });
+    const cb = el('input', { type: 'checkbox', id });
+    cb.addEventListener('change', () => onChange(cb.checked));
+    lbl.append(cb, el('span', { text: label }));
+    return lbl;
+}
+
 function buildPanel() {
     const container = el('div', { class: 'cmp-settings' });
 
-    // drawer header (collapsible, ST native style)
+    // drawer header — 折叠交给 ST 原生 .inline-drawer-toggle 处理，这里不绑事件
     const inline = el('div', { class: 'inline-drawer' });
     const toggle = el('div', { class: 'inline-drawer-toggle inline-drawer-header' });
     toggle.append(
@@ -258,58 +312,54 @@ function buildPanel() {
     );
     const content = el('div', { class: 'inline-drawer-content' });
 
-    // status line
+    // status line + master switch
     content.append(el('div', { id: 'cmp-status', class: 'cmp-status cmp-status-info', text: '加载中…' }));
+    content.append(checkbox('cmp-enabled', '启用补丁（总开关）', '关闭后不打任何补丁',
+        (v) => { state.enabled = v; }));
 
-    content.append(el('small', {
-        class: 'cmp-desc',
-        html: '为新发布 / 自定义的 Claude 模型（如 <code>claude-opus-4-8</code>）设置正确的思考模式。' +
-            '保存后会自动给后端打补丁，<b>需重启 SillyTavern 生效</b>。',
-    }));
+    // ===== ① 模型思考补丁 =====
+    const secModels = section('🧠 ① 模型思考补丁',
+        '让 ST 认识新 Claude 模型并用对思考模式。作用于 Claude 官方直连源；保存后需重启 ST。');
+    secModels.append(el('div', { id: 'cmp-model-list', class: 'cmp-model-list' }));
+    const modelBtns = el('div', { class: 'cmp-buttons' });
+    modelBtns.append(el('div', {
+        class: 'menu_button menu_button_icon',
+        onclick: () => { state.models.push(defaultModel()); renderModels(); },
+    }, [el('i', { class: 'fa-solid fa-plus' }), el('span', { text: '添加模型' })]));
+    secModels.append(modelBtns);
+    secModels.append(checkbox('cmp-patch-frontend', '补丁前端（1M 上下文滑条上限）',
+        '同时给前端 openai.js 打补丁，让上下文滑条能拉到 1M',
+        (v) => { state.patchFrontend = v; }));
+    content.append(secModels);
 
-    // global toggles
-    const globals = el('div', { class: 'cmp-globals' });
-    const enabledLbl = el('label', { class: 'checkbox_label', title: '关闭后不打任何补丁' });
-    const enabledCb = el('input', { type: 'checkbox', id: 'cmp-enabled' });
-    enabledCb.addEventListener('change', () => { state.enabled = enabledCb.checked; });
-    enabledLbl.append(enabledCb, el('span', { text: '启用补丁' }));
+    // ===== ② 提示词缓存 =====
+    const secCache = section('💾 ② 提示词缓存',
+        '写入 config.yaml，对 Claude 官方直连和 OpenRouter 同时生效；勾选最后一项后对"自定义(OpenAI兼容)"源也生效。改动需重启 ST。');
 
-    const feLbl = el('label', { class: 'checkbox_label', title: '同时给前端 openai.js 打补丁（1M 上下文上限）' });
-    const feCb = el('input', { type: 'checkbox', id: 'cmp-patch-frontend' });
-    feCb.addEventListener('change', () => { state.patchFrontend = feCb.checked; });
-    feLbl.append(feCb, el('span', { text: '补丁前端 (1M 上下文)' }));
+    secCache.append(checkbox('cmp-cache-manage', '由插件接管缓存设置',
+        '开启后保存时把下面几项写进 config.yaml → claude 段；关闭则完全不碰 config.yaml',
+        (v) => { state.caching.manage = v; updateCacheUIState(); }));
 
-    const orLbl = el('label', { class: 'checkbox_label', title: 'OpenRouter 选“极高”时保留 max 思考（而非降级成 high），并把 verbosity 兜底设为 max' });
-    const orCb = el('input', { type: 'checkbox', id: 'cmp-openrouter-max' });
-    orCb.addEventListener('change', () => { state.openrouterMaxEffort = orCb.checked; });
-    orLbl.append(orCb, el('span', { text: 'OpenRouter 极高思考' }));
+    const masterRow = el('div', { id: 'cmp-cache-master-row' });
+    masterRow.append(checkbox('cmp-cache-master', '启用提示词缓存（一键开/关）',
+        '关闭 = 自动把"缓存系统提示词"取消勾选并把打点深度设为 -1（记住原值）；开启 = 恢复原来的深度',
+        (v) => {
+            if (v) {
+                state.caching.enableSystemPromptCache = true;
+                state.caching.cachingAtDepth = recallDepth();
+            } else {
+                rememberDepth();
+                state.caching.enableSystemPromptCache = false;
+                state.caching.cachingAtDepth = -1;
+            }
+            syncGlobalControls();
+        }));
+    secCache.append(masterRow);
 
-    globals.append(enabledLbl, feLbl, orLbl);
-    content.append(globals);
-
-    // prompt caching section
-    const cacheWrap = el('div', { class: 'cmp-globals' });
-    cacheWrap.append(el('b', { text: '提示词缓存 (config.yaml)' }));
-
-    const manageLbl = el('label', { class: 'checkbox_label', title: '开启后，保存时会把下面三项写进 SillyTavern 的 config.yaml → claude 段' });
-    const manageCb = el('input', { type: 'checkbox', id: 'cmp-cache-manage' });
-    manageCb.addEventListener('change', () => { state.caching.manage = manageCb.checked; });
-    manageLbl.append(manageCb, el('span', { text: '由插件接管缓存设置' }));
-
-    const sysLbl = el('label', { class: 'checkbox_label', title: '缓存系统提示词+角色卡+工具列表 (enableSystemPromptCache)' });
-    const sysCb = el('input', { type: 'checkbox', id: 'cmp-cache-system' });
-    sysCb.addEventListener('change', () => { state.caching.enableSystemPromptCache = sysCb.checked; });
-    sysLbl.append(sysCb, el('span', { text: '缓存系统提示词+角色卡' }));
-
-    const ttlLbl = el('label', { class: 'checkbox_label', title: '缓存保留 1 小时（关闭则 5 分钟）。回合间隔常超过 5 分钟就开着 (extendedTTL)' });
-    const ttlCb = el('input', { type: 'checkbox', id: 'cmp-cache-ttl' });
-    ttlCb.addEventListener('change', () => { state.caching.extendedTTL = ttlCb.checked; });
-    ttlLbl.append(ttlCb, el('span', { text: '1 小时缓存 (关=5分钟)' }));
-
-    const customLbl = el('label', { class: 'checkbox_label', title: '给 ST 的“自定义(OpenAI兼容)”源也打缓存断点（如 Vercel AI Gateway 等中转）。模型名带 claude 才生效，复用上面的开关和打点深度' });
-    const customCb = el('input', { type: 'checkbox', id: 'cmp-cache-custom' });
-    customCb.addEventListener('change', () => { state.caching.patchCustomSource = customCb.checked; });
-    customLbl.append(customCb, el('span', { text: '自定义(兼容)源也打缓存断点' }));
+    const subWrap = el('div', { id: 'cmp-cache-sub', class: 'cmp-cache-sub' });
+    subWrap.append(checkbox('cmp-cache-system', '缓存系统提示词+角色卡',
+        'enableSystemPromptCache：在系统提示词（含角色卡、工具列表）末尾打缓存断点',
+        (v) => { state.caching.enableSystemPromptCache = v; }));
 
     const depthRow = el('div', { class: 'cmp-row' });
     const depthInput = el('input', {
@@ -318,30 +368,40 @@ function buildPanel() {
         type: 'number',
         min: '-1',
         step: '1',
-        title: '打点深度 (cachingAtDepth)。填“发原文的楼层数+2”：例如正则只放行 10 层内原文就填 12；换成 20 层就填 22。-1 = 关闭深度打点',
+        title: '打点深度 (cachingAtDepth)。填"发原文的楼层数+2"：例如正则只放行 10 层内原文就填 12。-1 = 关闭深度打点',
         oninput: (e) => {
             const v = parseInt(e.target.value, 10);
             state.caching.cachingAtDepth = Number.isInteger(v) && v >= -1 ? v : 12;
         },
     });
     depthRow.append(el('label', { class: 'cmp-label', text: '打点深度' }), depthInput);
-
-    cacheWrap.append(manageLbl, sysLbl, ttlLbl, customLbl, depthRow);
-    cacheWrap.append(el('small', {
-        class: 'cmp-desc',
-        text: '深度 = 发原文的楼层数 + 2（摘要边界外的稳定区）。修改后保存并重启 ST 生效。',
+    subWrap.append(depthRow);
+    subWrap.append(el('small', {
+        class: 'cmp-section-desc',
+        text: '深度 = 发原文的楼层数 + 2（摘要边界外的稳定区）。',
     }));
-    content.append(cacheWrap);
 
-    // model list
-    content.append(el('div', { id: 'cmp-model-list', class: 'cmp-model-list' }));
+    subWrap.append(checkbox('cmp-cache-ttl', '1 小时缓存（关=5分钟）',
+        'extendedTTL：缓存保留 1 小时。回合间隔常超过 5 分钟就开着',
+        (v) => { state.caching.extendedTTL = v; }));
 
-    // buttons
-    const btns = el('div', { class: 'cmp-buttons' });
-    const addBtn = el('div', {
-        class: 'menu_button menu_button_icon',
-        onclick: () => { state.models.push(defaultModel()); renderModels(); },
-    }, [el('i', { class: 'fa-solid fa-plus' }), el('span', { text: '添加模型' })]);
+    subWrap.append(checkbox('cmp-cache-custom', '自定义(OpenAI兼容)源也生效',
+        '给 ST 的"自定义"源打同样的缓存断点（如 Vercel AI Gateway 等中转）。模型名带 claude 才生效，复用上面的开关和深度',
+        (v) => { state.caching.patchCustomSource = v; }));
+
+    secCache.append(subWrap);
+    content.append(secCache);
+
+    // ===== ③ OpenRouter 附加 =====
+    const secOr = section('🔀 ③ OpenRouter 附加',
+        '只影响走 OpenRouter 的 Claude 模型，和上面两块互不相干。');
+    secOr.append(checkbox('cmp-openrouter-max', '“极高”思考不降级',
+        '选"极高"时保留 max 思考（ST 默认会降成 high），并把 verbosity 兜底设为 max',
+        (v) => { state.openrouterMaxEffort = v; }));
+    content.append(secOr);
+
+    // ===== 底部按钮 =====
+    const btns = el('div', { class: 'cmp-buttons cmp-footer-buttons' });
     const saveBtn = el('div', {
         class: 'menu_button menu_button_icon',
         onclick: () => save(),
@@ -351,15 +411,8 @@ function buildPanel() {
         title: '从后端重新读取配置',
         onclick: () => loadFromServer(),
     }, [el('i', { class: 'fa-solid fa-rotate' }), el('span', { text: '重新加载' })]);
-    btns.append(addBtn, saveBtn, reloadBtn);
+    btns.append(saveBtn, reloadBtn);
     content.append(btns);
-
-    toggle.addEventListener('click', () => {
-        content.classList.toggle('cmp-open');
-        const icon = toggle.querySelector('.inline-drawer-icon');
-        if (icon) icon.classList.toggle('up'), icon.classList.toggle('down');
-        content.style.display = content.style.display === 'none' ? '' : 'none';
-    });
 
     inline.append(toggle, content);
     container.append(inline);
