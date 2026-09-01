@@ -89,13 +89,28 @@ function defaultModel() {
     };
 }
 
+const DEPTH_MODE_OPTIONS = [
+    {
+        value: 'switches',
+        label: '聊天中 @深度 — 按角色轮换计数（ST 原生）',
+        hint: '从底往上数 user/assistant 轮换次数。适合常规聊天（每层都发原文）。注意：连续同角色消息（如摘要区）会被合并成 1 层，深度可能永远数不到。',
+    },
+    {
+        value: 'blocks',
+        label: '聊天中 @深度 — 按楼层/消息块计数（摘要流推荐）',
+        hint: '从底往上数每个文本块（每条原始楼层算 1 块，即使被合并进同一条消息）。断点能打进合并后的摘要区内部，适合"N 层内原文+N 层外只发摘要"的方案。',
+    },
+];
+
 function defaultCaching() {
     return {
         manage: false,
         enableSystemPromptCache: true,
         cachingAtDepth: 12,
+        depthMode: 'switches',
         extendedTTL: true,
         patchCustomSource: false,
+        debug: false,
     };
 }
 
@@ -224,16 +239,30 @@ function syncGlobalControls() {
     const manage = document.getElementById('cmp-cache-manage');
     const master = document.getElementById('cmp-cache-master');
     const sys = document.getElementById('cmp-cache-system');
+    const mode = document.getElementById('cmp-cache-mode');
     const depth = document.getElementById('cmp-cache-depth');
     const ttl = document.getElementById('cmp-cache-ttl');
     const custom = document.getElementById('cmp-cache-custom');
+    const debug = document.getElementById('cmp-cache-debug');
     if (manage) manage.checked = Boolean(c.manage);
     if (master) master.checked = isCacheMasterOn();
     if (sys) sys.checked = c.enableSystemPromptCache !== false;
+    if (mode) mode.value = c.depthMode === 'blocks' ? 'blocks' : 'switches';
     if (depth) depth.value = Number.isInteger(Number(c.cachingAtDepth)) ? c.cachingAtDepth : 12;
     if (ttl) ttl.checked = c.extendedTTL !== false;
     if (custom) custom.checked = Boolean(c.patchCustomSource);
+    if (debug) debug.checked = Boolean(c.debug);
+    updateDepthModeHint();
     updateCacheUIState();
+}
+
+/** 打点位置模式说明跟随下拉选项变化 */
+function updateDepthModeHint() {
+    const hint = document.getElementById('cmp-cache-mode-hint');
+    if (!hint) return;
+    const mode = state?.caching?.depthMode === 'blocks' ? 'blocks' : 'switches';
+    const opt = DEPTH_MODE_OPTIONS.find(o => o.value === mode);
+    hint.textContent = opt ? opt.hint : '';
 }
 
 async function loadFromServer() {
@@ -357,9 +386,27 @@ function buildPanel() {
     secCache.append(masterRow);
 
     const subWrap = el('div', { id: 'cmp-cache-sub', class: 'cmp-cache-sub' });
-    subWrap.append(checkbox('cmp-cache-system', '缓存系统提示词+角色卡',
-        'enableSystemPromptCache：在系统提示词（含角色卡、工具列表）末尾打缓存断点',
+    subWrap.append(checkbox('cmp-cache-system', '缓存系统提示词+角色卡（角色定义后打点）',
+        'enableSystemPromptCache：在系统提示词（含角色卡、工具列表）末尾打缓存断点，相当于"角色定义后"位置',
         (v) => { state.caching.enableSystemPromptCache = v; }));
+
+    // 打点位置（类似世界书选注入位置）
+    const modeRow = el('div', { class: 'cmp-row' });
+    const modeSel = el('select', {
+        class: 'text_pole cmp-cache-mode',
+        id: 'cmp-cache-mode',
+        title: '聊天区缓存断点的计数方式（配合下面的打点深度使用）',
+        onchange: (e) => {
+            state.caching.depthMode = e.target.value === 'blocks' ? 'blocks' : 'switches';
+            updateDepthModeHint();
+        },
+    });
+    for (const opt of DEPTH_MODE_OPTIONS) {
+        modeSel.append(el('option', { value: opt.value, text: opt.label }));
+    }
+    modeRow.append(el('label', { class: 'cmp-label', text: '打点位置' }), modeSel);
+    subWrap.append(modeRow);
+    subWrap.append(el('small', { id: 'cmp-cache-mode-hint', class: 'cmp-section-desc' }));
 
     const depthRow = el('div', { class: 'cmp-row' });
     const depthInput = el('input', {
@@ -378,7 +425,7 @@ function buildPanel() {
     subWrap.append(depthRow);
     subWrap.append(el('small', {
         class: 'cmp-section-desc',
-        text: '深度 = 发原文的楼层数 + 2（摘要边界外的稳定区）。',
+        text: '深度 = 发原文的楼层数 + 2（摘要边界外的稳定区）。开调试日志可在 ST 控制台看到断点实际落点。',
     }));
 
     subWrap.append(checkbox('cmp-cache-ttl', '1 小时缓存（关=5分钟）',
@@ -388,6 +435,10 @@ function buildPanel() {
     subWrap.append(checkbox('cmp-cache-custom', '自定义(OpenAI兼容)源也生效',
         '给 ST 的"自定义"源打同样的缓存断点（如 Vercel AI Gateway 等中转）。模型名带 claude 才生效，复用上面的开关和深度',
         (v) => { state.caching.patchCustomSource = v; }));
+
+    subWrap.append(checkbox('cmp-cache-debug', '调试日志（控制台打印断点落点）',
+        '在 ST 服务器控制台打印每个缓存断点落在第几条消息/哪个文本块上，方便核对打点深度',
+        (v) => { state.caching.debug = v; }));
 
     secCache.append(subWrap);
     content.append(secCache);
